@@ -151,3 +151,58 @@ for {
 6. Как доказать, что в сервисе нет утечек горутин при отмене запроса?
 
 Источники: [runtime/HACKING](https://go.dev/src/runtime/HACKING), [Go memory model](https://go.dev/ref/mem), [pipelines](https://go.dev/blog/pipelines), [Go 1.22 loop variables](https://go.dev/blog/loopvar-preview), [Go 1.27](https://go.dev/doc/go1.27).
+
+## Дополнительные каверзы, основанные на runtime и обзорах утечек
+
+### 14. `go f(arg())` вычисляет аргумент в родителе
+
+```go
+func arg() int {
+    fmt.Print("arg ")
+    return 5
+}
+func f(v int) { fmt.Print("worker ", v) }
+func main() {
+    go f(arg())
+    fmt.Print("main ")
+    time.Sleep(10 * time.Millisecond) // только для демонстрации, не для ожидания в production
+}
+```
+
+`arg()` всегда выполняется до запуска `f` и именно в текущей горутине. А вот порядок `"worker"` и `"main"` не гарантируется.
+
+### 15. В `GOMAXPROCS(1)` гонки не исчезают
+
+Один P не делает доступы к памяти атомарными на уровне логики. Между чтением переменной и её записью другая горутина может исполниться из-за планирования. Синхронизация по-прежнему нужна; `GOMAXPROCS=1` — настройка параллельного исполнения, не lock.
+
+### 16. Поток ОС и goroutine не эквивалентны
+
+Может понадобиться `runtime.LockOSThread()` для редких API с thread-local состоянием (например, специфическое взаимодействие с C/OS). Это привязывает текущую горутину к потоку ОС, увеличивает требования к ресурсам; необходим парный `UnlockOSThread` по контракту. Для обычного бизнес-кода не использовать.
+
+### 17. Горутинная утечка не обязана быть data race
+
+```go
+func produce() <-chan int {
+    out := make(chan int)
+    go func() {
+        for i := 0; ; i++ { out <- i }
+    }()
+    return out
+}
+func caller() {
+    ch := produce()
+    fmt.Println(<-ch) // получаем один элемент и уходим
+}
+```
+
+Писатель навсегда ждёт второй отправки. Memory race может отсутствовать полностью. GC не завершает такую горутину за тебя; надо предусмотреть `done`/`context` и отменяемый `select`.
+
+### 18. Goroutine leak profiling с Go 1.27
+
+`runtime/pprof` поддерживает `goroutineleak` — профиль случаев, которые runtime **может доказать** как безвозвратную блокировку на первом классе примитивов. Он не обязан находить все утечки (например, внешний syscall или реальный «живой» цикл без прогресса). Важно рассматривать его как дополнительный сигнал, а не автоматическую теорему «раз профиля нет, утечек нет».
+
+### 19. Error group решает не всё
+
+`errgroup.WithContext` отменяет контекст при ошибке, но другая задача **должна наблюдать отмену**. Если worker заблокирован на прямой `out <- x`, `g.Wait()` может остаться заблокированным. Для bounded concurrency у `errgroup.Group` есть `SetLimit` — это средство лимита одновременно запущенных задач, а не очередь с гарантиями доставки.
+
+Источники: [Go pipelines and cancellation](https://go.dev/blog/pipelines), [Go Goroutine Leak Profiles](https://go.dev/blog/goroutine-leak-profiles), [runtime](https://pkg.go.dev/runtime), [errgroup](https://pkg.go.dev/golang.org/x/sync/errgroup).
