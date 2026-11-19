@@ -104,3 +104,71 @@ var b any = []int{1}
 - Почему у конвертации к интерфейсу нет универсального правила «всегда аллокация»?
 
 Источники: [Go spec — interface types](https://go.dev/ref/spec#Interface_types), [method sets](https://go.dev/ref/spec#Method_sets), [comparisons](https://go.dev/ref/spec#Comparison_operators), [errors](https://pkg.go.dev/errors).
+
+## Дополнительные каверзы интерфейсов
+
+### 11. Два интерфейса со «значением nil» могут быть не равны
+
+```go
+var p *int
+var q *string
+var x any = p
+var y any = q
+fmt.Println(x == nil, y == nil) // false false
+fmt.Println(x == y) // false: разные динамические типы
+```
+
+**Почему:** сравниваются пары `(тип, значение)`; одинаково выглядящий nil указатель **не убирает** динамический тип.
+
+### 12. Интерфейсный аргумент может измениться, а исходный объект — нет
+
+```go
+func replace(x any) {
+    x = 99 // меняет локальную копию интерфейсного значения
+}
+func main() {
+    var x any = "hello"
+    replace(x)
+    fmt.Println(x) // hello
+}
+```
+
+Передача `any` — по значению. Если `x` содержит ссылкоподобный объект и меняют его содержимое, изменение может быть видно снаружи; замена самого интерфейсного значения — нет.
+
+### 13. Встраивание интерфейса в структуру и typed nil
+
+```go
+type WriterHolder struct{ io.Writer }
+var b *bytes.Buffer
+h := WriterHolder{Writer: b}
+// h.Writer != nil, потому что динамический тип = *bytes.Buffer.
+fmt.Println(h.Writer == nil) // false
+```
+
+Если вызвать метод, который не поддерживает nil receiver, может произойти panic. Для dependency injection такой «формально не nil» интерфейс иногда маскирует отсутствие настоящей зависимости.
+
+### 14. `errors.As` проверяет и вложенные уровни
+
+```go
+pathErr := &os.PathError{Op: "open", Path: "a", Err: os.ErrNotExist}
+wrapped := fmt.Errorf("service: %w", pathErr)
+var got *os.PathError
+fmt.Println(errors.As(wrapped, &got), got.Path) // true a
+```
+
+Прямой type assertion `wrapped.(*os.PathError)` не успешен: динамический тип верхней обёртки иной. Поэтому при работе с wrapped errors нужны `errors.As/Is`.
+
+### 15. Метод value receiver доступен на `*T`, но pointer receiver — не на `T`
+
+```go
+type X struct{}
+func (X) Read() {}
+func (*X) Write() {}
+type RW interface { Read(); Write() }
+var _ RW = (*X)(nil)
+// var _ RW = X{} // compile error
+```
+
+Это **method set**, а не случайность компилятора. При адресуемом `x := X{}; x.Write()` компилятор может взять адрес автоматически, но не применяет это при проверке, удовлетворяет ли `X` интерфейсу.
+
+Источники: [Spec — interfaces](https://go.dev/ref/spec#Interface_types), [Spec — method sets](https://go.dev/ref/spec#Method_sets), [Go FAQ](https://go.dev/doc/faq).
