@@ -85,3 +85,51 @@ case <-ctx.Done():
 5. Почему контекстные значения не заменяют аргументы функции?
 
 Источник: [context](https://pkg.go.dev/context), [Go pipelines](https://go.dev/blog/pipelines).
+
+## Ещё семь скрытых аспектов контекстов
+
+### 12. `context.WithoutCancel` отключает отмену предка
+
+```go
+parent, cancel := context.WithCancel(context.Background())
+child := context.WithoutCancel(parent)
+cancel()
+fmt.Println(child.Err(), child.Done() == nil) // <nil> true
+```
+
+Этот контекст сохраняет значения родителя, но **не** его deadline/отмену; `Cause(child)` тоже nil. Полезен для некоторых фоновых задач, которые должны пережить запрос, но легко получить «вечный» worker. Всегда добавляй **собственный timeout**, если работа должна завершиться.
+
+### 13. `AfterFunc` запускает callback асинхронно
+
+```go
+stop := context.AfterFunc(ctx, cleanup)
+// stop() возвращает, удалось ли предотвратить запуск cleanup.
+```
+
+**Каверза:** `stop()` не ждёт завершения уже запущенного `cleanup`. Если надо дождаться, создай собственный done/WaitGroup. Callback вызывается в отдельной горутине, поэтому доступ к разделяемым данным нужно синхронизировать.
+
+### 14. Причина отмены по дереву
+
+При `WithCancelCause` первая произошедшая релевантная отмена фиксирует причину; последующий вызов `cancel(otherErr)` не перезапишет уже установленную причину. `ctx.Err()` остаётся общим `Canceled`/`DeadlineExceeded`, а подробность доступна через `context.Cause(ctx)`.
+
+### 15. Контекст не должен хранить обязательные параметры
+
+`func Load(ctx context.Context, userID int64)` лучше, чем `func Load(ctx)` с извлечением `userID` из `ctx.Value`. Причина: сигнатура явно показывает зависимости; контекстные значения предназначены для cross-API request-scoped metadata.
+
+### 16. `defer cancel()` внутри долгого цикла
+
+```go
+for _, job := range jobs {
+    ctx, cancel := context.WithTimeout(parent, time.Second)
+    defer cancel() // весь набор defer выполнится лишь по выходе из этой функции
+    do(ctx, job)
+}
+```
+
+При многих итерациях можно задержать освобождение таймеров и ссылок. Лучше выносить одну итерацию в функцию либо явно вызывать `cancel` по завершении `do`.
+
+### 17. Родительский deadline нельзя продлить дочерним
+
+Дочерний `WithTimeout(parent, time.Minute)` не проживёт дольше parent с дедлайном через 5 секунд: отмена родителя распространяется к потомку. Для фоновой задачи после запроса выбери новый контролируемый корень/`WithoutCancel` с явным ограничением.
+
+Источники: [context API](https://pkg.go.dev/context), [Contexts and structs](https://go.dev/blog/context-and-structs).
