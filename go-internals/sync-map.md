@@ -60,3 +60,47 @@ actual, loaded := m.LoadOrStore("key", expensiveResult())
 5. Почему `sync.Map` не может обеспечить инвариант сразу между несколькими ключами без дополнительного протокола?
 
 Источник: [sync.Map](https://pkg.go.dev/sync#Map).
+
+## Дополнительные тонкости специализированной карты
+
+### 9. `CompareAndSwap` и несравнимые значения
+
+```go
+var m sync.Map
+m.Store("x", []int{1, 2})
+// m.CompareAndSwap("x", []int{1, 2}, []int{3}) // panic
+```
+
+`sync.Map` хранит значения `any`, но сравнение **old** в `CompareAndSwap` требует сравнимого конкретного типа. Для mutable значения типа слайса предпочтительны pointer на immutable snapshot или mutex вокруг сложной операции.
+
+### 10. `Range` не даёт «снимок прямо сейчас»
+
+```go
+m.Range(func(k, v any) bool {
+    // параллельный Store/Delete может изменить набор и значения
+    return true
+})
+```
+
+В зависимости от конкурентных действий callback может увидеть значения из разных моментов времени. **Итерация не транзакция**. Для точной согласованной суммы или audit-снимка нужна внешняя координация.
+
+### 11. `LoadOrStore` не подавляет побочные эффекты вычисления
+
+`m.LoadOrStore(k, generate())` вызывает `generate()` **до** атомарной проверки ключа. При двух workers функция генерации может выполниться дважды. Если она делает платёж/отправку письма, `LoadOrStore` не предоставляет exactly-once семантики. Нужен механизм идемпотентности или координация вычисления.
+
+### 12. Однократное создание значения с `*entry + sync.Once`
+
+```go
+type entry struct {
+    once sync.Once
+    val string
+}
+actual, _ := m.LoadOrStore("x", &entry{})
+e := actual.(*entry)
+e.once.Do(func() { e.val = load() })
+fmt.Println(e.val)
+```
+
+Вызов `load()` произойдёт не более одного раза для сохранённого entry, а другие дождутся его окончания. Но нет автоматического retry после ошибки; для более сложной стратегии использовать state machine.
+
+Источники: [sync.Map](https://pkg.go.dev/sync#Map), [sync.Once](https://pkg.go.dev/sync#Once).
