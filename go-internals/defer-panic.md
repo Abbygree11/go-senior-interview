@@ -136,3 +136,65 @@ func writeFile(f *os.File) (err error) {
 6. Когда игнорирование ошибки `Close` некорректно?
 
 Источники: [Go spec — defer](https://go.dev/ref/spec#Defer_statements), [panic/recover](https://go.dev/ref/spec#Handling_panics), [errors.Join](https://pkg.go.dev/errors#Join).
+
+## Дополнительные tricky cases
+
+### 11. `defer` с nil-функцией паникует **при выполнении**, не при регистрации
+
+```go
+var f func()
+defer f() // регистрация успешна; при выходе из функции будет panic
+```
+
+**Почему:** значение вызываемой функции вычисляется при постановке `defer`, но попытка *вызвать* nil функцию происходит позже.
+
+### 12. Receiver метода вычисляется в момент регистрации
+
+```go
+type Cell struct{ X int }
+func (c Cell) Print() { fmt.Println(c.X) }
+func demo() {
+    c := Cell{1}
+    defer c.Print()
+    c.X = 2
+}
+// печатает 1, поскольку value receiver скопирован при регистрации defer
+```
+
+С pointer receiver результат был бы иным, если после регистрации изменить тот же объект.
+
+### 13. `defer` в цикле нельзя «сбросить фигурными скобками»
+
+```go
+for _, p := range files {
+    {
+        f, _ := os.Open(p)
+        defer f.Close()
+    } // здесь defer НЕ запускается
+}
+```
+
+Это частая каверза. Граница `defer` — **функция**, не block scope. Нужна отдельная helper-функция или немедленный `Close` на всех путях. И всегда проверять ошибку `Open` перед `defer`.
+
+### 14. Отложенные функции могут изменить именованный `err`
+
+```go
+func closeFile(f *os.File) (err error) {
+    defer func() { err = errors.Join(err, f.Close()) }()
+    _, err = f.WriteString("hello")
+    return
+}
+```
+
+Defer вызывается после присваивания именованного результата, но до фактического возврата. Здесь можно добавить ошибку закрытия, а не потерять её; однако случайная запись `err = nil` в defer способна скрыть исходный сбой.
+
+### 15. `recover` не ловит panic другой горутины
+
+```go
+defer func() { _ = recover() }()
+go func() { panic("worker") }() // defer выше не перехватит
+```
+
+Для настоящей обработки panic worker должен установить **собственный** defer recover. Не использовать recover как штатную бизнес-обработку ошибок.
+
+Источники: [Spec — defer](https://go.dev/ref/spec#Defer_statements), [Spec — panics](https://go.dev/ref/spec#Handling_panics).
