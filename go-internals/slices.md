@@ -181,3 +181,79 @@ for i := range users {
 6. Какие гонки возникают при `append` из нескольких горутин?
 
 Источники: [Go spec — slice expressions](https://go.dev/ref/spec#Slice_expressions), [append/copy](https://go.dev/ref/spec#Appending_and_copying_slices), [slices](https://pkg.go.dev/slices).
+
+## Дополнительные каверзы из официальных SliceTricks и `slices` (проверено по Go 1.27)
+
+### 12. `slices.Delete` и ручное удаление — не совсем одно и то же
+
+```go
+type Big struct{ Data [1024]byte }
+a := []*Big{new(Big), new(Big), new(Big)}
+removed := a[1]
+a = append(a[:1], a[2:]...)
+// len(a) = 2, но элемент хвоста backing array всё ещё может ссылаться на Big.
+_ = removed
+```
+
+**Почему:** `append`/`copy` перемещают элементы, но **не обнуляют неиспользуемые ячейки за новой длиной**. Отсюда retention: объект остаётся достижимым для GC через массив. Начиная с Go 1.22 `slices.Delete`/`DeleteFunc` и ряд других функций обнуляют оставшийся хвост. Если реализуешь удаление сам, сохрани `oldLen` и обнули `clear(a[len(a):oldLen])`, предварительно расширив длину до `oldLen` при необходимости и убедившись, что нет других владельцев хвоста.
+
+### 13. `slices.Grow` — гарантия ёмкости, но не сохранения адресов
+
+```go
+s := make([]int, 1, 1)
+p := &s[0]
+s = slices.Grow(s, 100)
+s[0] = 9
+fmt.Println(*p) // может остаться старое значение 0
+```
+
+Рост ёмкости может заменить backing array. **Почему:** pointer `p` остаётся указателем на элемент старого массива, не перенаправляется на новый. `slices.Grow` не меняет длину. Не передавай наружу `&s[i]`, если дальше собираешься расширять `s`.
+
+### 14. `clear(s)` не меняет длину
+
+```go
+s := []int{1, 2, 3}
+clear(s)
+fmt.Println(s, len(s)) // [0 0 0] 3
+```
+
+`clear` для слайса обнуляет **текущие элементы**, а для map удаляет записи. Один и тот же встроенный идентификатор, разные контракты. `clear(s)` не освобождает backing array и не меняет `len/cap`.
+
+### 15. `append` из строки
+
+```go
+b := []byte("Go")
+b = append(b, "lang"...)
+fmt.Println(string(b)) // Golang
+```
+
+Это специальная форма встроенного `append`: строка раскладывается на байты при `...`. Она не декодирует Unicode rune.
+
+### 16. Пустой `range`, `nil` и JSON
+
+```go
+var a []int
+b := []int{}
+fmt.Println(a == nil, b == nil) // true false
+fmt.Println(len(a), len(b))     // 0 0
+out1, _ := json.Marshal(a)
+out2, _ := json.Marshal(b)
+fmt.Println(string(out1), string(out2)) // null []
+```
+
+**Причина:** nilness — часть значения слайса, а не только его длина. Для API, где поле должно сериализоваться как `[]`, возвращай непустой заголовок пустого слайса (`[]T{}`), а не `nil`.
+
+### 17. `range` запоминает длину, но не копирует элементы слайса
+
+```go
+s := []int{1, 2, 3}
+for i, v := range s {
+    if i == 0 { s[1] = 99 }
+    fmt.Print(v, " ")
+}
+// 1 99 3
+```
+
+Количество итераций определяется длиной при входе в цикл. Но значения элементов читаются по мере обхода **того же backing array**; это отличается от `range` по массиву. Если в цикле `s = append(s, ...)`, новые элементы не добавятся к числу итераций.
+
+Источники: [SliceTricks](https://go.dev/wiki/SliceTricks), [Robust generic functions on slices](https://go.dev/blog/generic-slice-functions), [slices API](https://pkg.go.dev/slices), [Go spec — range](https://go.dev/ref/spec#For_statements).
