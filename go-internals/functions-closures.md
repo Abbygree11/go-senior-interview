@@ -104,3 +104,51 @@ fmt.Println(f()) // 1
 Почему замыкание печатает изменённый `x`? Когда receiver метода копируется? Почему callback под mutex опасен? Чем поведение цикла в Go 1.21 отличается от модуля `go 1.22`? Как замыкание удерживает память?
 
 Источники: [Go spec — function literals](https://go.dev/ref/spec#Function_literals), [method values](https://go.dev/ref/spec#Method_values), [Go 1.22 loops](https://go.dev/blog/loopvar-preview).
+
+## Дополнительные вопросы по захвату переменных
+
+### 10. `range` по map и замыкание: порядок всё равно не определён
+
+С Go 1.22 переменная `v`, объявленная через `:=` в цикле, новая для каждой итерации, но **сам порядок обхода map непредсказуем**. Исправление loop variable не делает программы с `go func(){fmt.Println(k,v)}()` детерминированными.
+
+### 11. Method expression отличается от method value
+
+```go
+type Box struct{ V int }
+func (b Box) Get() int { return b.V }
+x := Box{1}
+value := x.Get      // захват receiver x по значению
+expr := Box.Get      // функция, ожидающая receiver параметром
+x.V = 2
+fmt.Println(value(), expr(x)) // 1 2
+```
+
+Method value захватывает receiver при создании значения функции. Method expression — преобразует метод в обычную функцию с явным первым аргументом.
+
+### 12. `defer f()` фиксирует само значение функции
+
+```go
+f := func() { fmt.Println("old") }
+defer f()
+f = func() { fmt.Println("new") }
+// выполнится old
+```
+
+`defer` вычисляет **функцию и её аргументы при регистрации**. Это не то же самое, что `defer func(){ f() }()`: замыкание прочитает текущее значение `f` позже.
+
+### 13. Утечка через closure и большой объект
+
+```go
+func makeFn(big []byte) func() byte {
+    // Замыкание захватывает slice header и удерживает большой backing array.
+    return func() byte { return big[0] }
+}
+```
+
+Если нужна только первая цифра/байт, сохрани `v := big[0]` и захвати `v`. Поскольку GC видит ссылку на большой массив через slice, память останется достижимой, пока closure живо.
+
+### 14. Loop variable в старом модуле
+
+Проверять строку `go` в `go.mod` важно: компилятор новой версии Go может сохранять прежнюю семантику loop variables для модулей со старой версией языка. Подробное описание см. [Fixing For Loops in Go 1.22](https://go.dev/blog/loopvar-preview).
+
+Источники: [Method values/expressions](https://go.dev/ref/spec#Method_values), [Go 1.22](https://go.dev/doc/go1.22).
