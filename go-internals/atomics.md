@@ -141,3 +141,49 @@ stopped.Store(true)
 7. Когда mutex лучше CAS-loop?
 
 Источники: [sync/atomic](https://pkg.go.dev/sync/atomic), [Go memory model](https://go.dev/ref/mem), [atomic.Value example](https://pkg.go.dev/sync/atomic#example-Value-ReadMostly).
+
+## Глубже: атомарность не равна бизнес-корректности
+
+### 13. `atomic.Value` + `CompareAndSwap` с несравнимым типом
+
+```go
+var v atomic.Value
+v.Store([]int{1, 2})
+// v.CompareAndSwap([]int{1, 2}, []int{3, 4}) // panic из-за сравнения slices
+```
+
+`Value` умеет хранить такие значения (при одном concrete type), но **CAS должен сравнивать предыдущее значение**. Для несравнимых динамических типов (`[]T`/`map`) это невозможно обычным `==`, поэтому CAS вызывает panic. Для copy-on-write лучше `atomic.Pointer[Immutable]` или сравнимый `*T`.
+
+### 14. Два независимых атомика не заменяют транзакцию
+
+```go
+type State struct { A, B atomic.Int64 }
+var st State
+st.A.Store(1)
+st.B.Store(1)
+```
+
+Читатель между записями может наблюдать A=1, B=0. Это **не data race**, но нарушенный инвариант «A всегда равен B». Защита — один mutex для пары либо один `atomic.Pointer[immutableState]` и `Store` нового снимка целиком.
+
+### 15. `Load→Store` не эквивалентно `Add`
+
+```go
+x := counter.Load()
+counter.Store(x + 1)
+```
+
+Два workers могут одновременно прочитать одно число и оба записать `x+1`, потеряв инкремент **без data race**. Используй `counter.Add(1)` либо CAS-loop.
+
+### 16. CAS и нагрузка на cache line
+
+Когда 1000 workers многократно CAS-ят **один адрес**, все конкурируют за одну cache line, операции часто проигрывают, появляются повторы. Это может проигрывать простой защите через mutex или разбиению на локальные счётчики с последующим агрегированием. Не путай «нет блокировки» с «нет расходов на синхронизацию».
+
+### 17. Атомарный флаг не останавливает blocked goroutine
+
+`stopped.Store(true)` не разблокирует `<-ch`, `mu.Lock()` и `out <- x` сами по себе. Нужен протокол уведомления, например `close(done)` или `context.CancelFunc`, и ветка обработки этого уведомления во время потенциальной блокировки.
+
+### 18. Почему unsafe «ручные атомики» опасны
+
+Нельзя заменять `sync/atomic` самодельным чтением через `unsafe.Pointer` в надежде на атомарность машинного слова; кроме data race возникают вопросы alignment, GC write barriers и type safety. Для Go-кода выбирай API `atomic`/`sync`, для архитектурно низкоуровневой оптимизации — тесты на всех целевых платформах.
+
+Источники: [sync/atomic](https://pkg.go.dev/sync/atomic), [Go memory model](https://go.dev/ref/mem).
