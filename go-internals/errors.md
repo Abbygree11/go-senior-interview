@@ -84,3 +84,36 @@ Sentinel (`var ErrX = errors.New(...)`) удобен для стабильной
 Почему `return (*MyError)(nil)` даёт `err != nil`? Чем `errors.Is` отличается от `==`? Когда `errors.As` лучше type assertion? Зачем `errors.Join`? Почему игнорировать `Close` иногда опасно?
 
 Источники: [errors](https://pkg.go.dev/errors), [fmt.Errorf](https://pkg.go.dev/fmt#Errorf), [context](https://pkg.go.dev/context).
+
+## Дополнительные ошибки в работе с error-цепочками
+
+### 10. `errors.Join` строит дерево, а не один линейный `Unwrap() error`
+
+```go
+err := errors.Join(io.EOF, context.Canceled)
+fmt.Println(errors.Is(err, io.EOF)) // true
+```
+
+У ошибки, полученной из `Join`, есть `Unwrap() []error`. Обычная `errors.Unwrap(err)` не раскрывает эту форму, потому что функция `errors.Unwrap` рассчитана на `Unwrap() error`. Для проверки причин использовать `errors.Is/As`, которые обходят дерево.
+
+### 11. `errors.Is` и пользовательская реализация `Is(target error) bool`
+
+Собственный error type может реализовать `Is(error) bool`, позволяя совпадать с конкретной sentinel error по смыслу, даже когда типы разные. Однако `Is` должен делать **неглубокое сравнение текущей ошибки**, а не рекурсивно вызывать `errors.Is` на себе же.
+
+### 12. `errors.As` требует правильный target
+
+`var p *os.PathError; errors.As(err, &p)` — правильный пример. Передать `p` вместо `&p` — ошибка контракта (возможна panic), потому что нужно передать указатель на переменную, которая получит найденную ошибку.
+
+### 13. `fmt.Errorf("%w", err)` — часть API-контракта
+
+Оборачивая ошибку через `%w`, библиотека позволяет клиентам проверять underlying error — это полезно, но также связывает публичный API с типом/идентичностью внутренней ошибки. Не открывай детали внешнего драйвера через `%w` случайно, если не готов поддерживать их как поведение API.
+
+### 14. `nil` + `errors.Join`
+
+`errors.Join(nil, nil)` возвращает nil, но `errors.Join(err)` с одним ненулевым аргументом возвращает error со структурой Join, а не обязательно тот же объект `err`. Используй `errors.Is` вместо ожидания `joined == err`.
+
+### 15. `Close` и именованные return values
+
+В отложенной функции можно сделать `err = errors.Join(err, f.Close())` и сохранить две ошибки. Но следует учитывать, что `Close` для конкретного ресурса может иметь разную семантику (read-only файл, writer с буферизацией, сетевой сокет). Вопрос «нужно ли проверять Close?» решается требованиями к корректности записи.
+
+Источники: [errors package](https://pkg.go.dev/errors), [Working with Errors in Go 1.13](https://go.dev/blog/go1.13-errors).
