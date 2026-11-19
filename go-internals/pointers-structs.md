@@ -92,3 +92,60 @@ fmt.Println(*p) // 123
 Почему копия структуры со слайсом делит элементы? Чем pointer receiver отличается от value receiver в method set? Почему `&m[k]` нельзя, а `&s[i]` можно? Как `append` влияет на старый указатель на элемент? Почему `new(T)` не гарантирует heap?
 
 Источники: [Go spec — struct types](https://go.dev/ref/spec#Struct_types), [pointer types](https://go.dev/ref/spec#Pointer_types), [Go 1.26](https://go.dev/doc/go1.26).
+
+## Дополнительные traps: aliasing, layout, сравнение
+
+### 11. Указатель на элемент слайса переживает `append`, но остаётся в старой памяти
+
+```go
+a := []int{1}
+p := &a[0]
+a = append(a, 2) // исходный len=cap=1 => новый backing array
+a[0] = 9
+fmt.Println(*p, a[0]) // 1 9
+```
+
+**Почему:** `p` — адрес старого элемента; Go не создаёт «подвижные ссылки», автоматически перенаправляемые на новый массив.
+
+### 12. Копирование структуры делает мелкое копирование вложенных полей
+
+```go
+type C struct{ M map[string]int; N int }
+a := C{M: map[string]int{"x": 1}, N: 2}
+b := a
+b.N = 3
+b.M["x"] = 9
+fmt.Println(a.N, a.M["x"]) // 2 9
+```
+
+Поле `N` скопировано, поле `M` продолжает ссылаться на общую map. Для «клонировать структуру» недостаточно `b := a`, если нужна изоляция вложенных данных.
+
+### 13. Сравнение структур зависит от типов полей
+
+```go
+type Good struct{ X int; Name string }
+fmt.Println(Good{1, "x"} == Good{1, "x"}) // true
+// type Bad struct{ X []int }
+// Bad{} == Bad{} // compile error
+```
+
+Даже если слайс в конкретном объекте nil, **сам тип** структуры несравним, если среди полей есть несравнимый тип.
+
+### 14. `unsafe.Sizeof` не равно сумме размеров полей
+
+```go
+type Layout struct {
+    A byte
+    B int64
+    C byte
+}
+fmt.Println(unsafe.Sizeof(Layout{})) // платформозависимо; на amd64 обычно 24
+```
+
+Компилятор вставляет padding для выравнивания. Не сериализуй структуру простым копированием байтов и не полагайся на одинаковый layout между архитектурами/версиями. В протоколах используй явное кодирование.
+
+### 15. `&T{}` против `new(T)`, и что меняется в Go 1.26
+
+`&T{}` создаёт указатель на новую структуру с заданными полями; `new(T)` создаёт указатель на zero value T. Go 1.26 разрешил `new(expr)` для инициализации вычисленным значением. Размещение в stack/heap всё равно решает escape analysis, а не наличие символа `&` или `new`.
+
+Источники: [Go FAQ — everything passed by value](https://go.dev/doc/faq), [Spec — address operators](https://go.dev/ref/spec#Address_operators), [Go 1.26](https://go.dev/doc/go1.26).
