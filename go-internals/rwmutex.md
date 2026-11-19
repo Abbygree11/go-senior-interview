@@ -93,3 +93,45 @@ use(p)
 4. При каком профиле нагрузки `RWMutex` выигрывает, а когда проигрывает `Mutex`?
 
 Источники: [sync.RWMutex](https://pkg.go.dev/sync#RWMutex), [Go memory model](https://go.dev/ref/mem).
+
+## Дополнительные сложные случаи
+
+### 9. Смена read-lock на write-lock без интервала невозможна
+
+```go
+mu.RLock()
+if needWrite {
+    mu.RUnlock()
+    mu.Lock()
+    if needWriteNow() {
+        mutate()
+    }
+    mu.Unlock()
+} else {
+    mu.RUnlock()
+}
+```
+
+Между `RUnlock` и `Lock` другая горутина может изменить `needWriteNow`. **Почему:** `RWMutex` не предоставляет upgrade с атомарным переводом одной блокировки в другую. Поэтому обязательно повторить проверку.
+
+### 10. Рекурсивный `RLock` может привести к взаимной блокировке из-за writer
+
+Горутина A держит `RLock`. Горутина B приходит за `Lock` и ждёт A. Затем A хочет взять второй `RLock`: новый reader блокируется из-за ожидающего writer. A не может отпустить первый `RLock`, потому что застряла на втором. Это deadlock, несмотря на тезис «несколько читателей могут читать одновременно».
+
+### 11. Возврат map/указателя под `RLock` не защищает дальнейшее использование
+
+```go
+func (c *Cache) Snapshot() map[string]int {
+    c.mu.RLock()
+    defer c.mu.RUnlock()
+    return c.m // возвращён тот же объект map
+}
+```
+
+Вызвавший код может читать map **после освобождения lock**, пока писатели меняют её → race. Чтобы вернуть снимок, `maps.Clone(c.m)` под `RLock`. Вложенные mutable значения всё равно требуют отдельного копирования.
+
+### 12. Измерение `RWMutex`
+
+На read-mostly нагрузках с длительными критическими секциями параллельные readers часто выигрывают. На сверхкоротких `map` reads накладные расходы, cache-line contention и блокировки writers могут сделать простой `Mutex` быстрее. Нужно сравнивать **latency percentiles и throughput**, а не только `ns/op` одного микробенчмарка.
+
+Источники: [sync.RWMutex](https://pkg.go.dev/sync#RWMutex), [Go Memory Model](https://go.dev/ref/mem).
