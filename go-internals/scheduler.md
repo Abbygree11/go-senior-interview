@@ -63,3 +63,38 @@ flowchart LR
 Почему рост `GOMAXPROCS` может ухудшить latency? Чем netpoller отличается от отдельного M на каждый сокет? Почему вызов `Sleep` не исправляет гонку? Почему заблокированная горутина потребляет память, хотя не использует CPU?
 
 Источники: [runtime/HACKING](https://go.dev/src/runtime/HACKING), [runtime](https://pkg.go.dev/runtime), [Go 1.27 release notes](https://go.dev/doc/go1.27).
+
+## Глубже: почему scheduler не эквивалентен очереди задач
+
+### 11. Блокировка G не означает блокировку P
+
+Когда G ждёт на канале, scheduler может отдать P другой G. При syscall M может заблокироваться вместе с текущей G, а P перейдёт другому M. Отсюда:
+- масштабируемость сетевого I/O зависит не от числа потоков ОС на каждое соединение;
+- `GOMAXPROCS` — число контекстов исполнения, а не верхняя граница goroutines;
+- миллион спящих горутин всё равно означает расходы памяти и управляемых ресурсов.
+
+### 12. `runtime.Gosched()` — не synchronization primitive
+
+```go
+var ready bool
+go func() { ready = true }()
+for !ready {
+    runtime.Gosched() // не делает чтение ready безопасным
+}
+```
+
+Почему: yielding планировщику **не создаёт** happens-before и не заменяет atomic/channel. На такой проверке будет data race. Правильно: закрывать канал готовности, использовать атомарный флаг либо mutex.
+
+### 13. Preemption не гарантирует отсутствия starvation
+
+Текущее вытеснение помогает не захватывать P навсегда из-за длинного CPU-loop, но не обещает жесткого дедлайна каждому worker. Контеншн за mutex, паузы, cgo, blocking syscall и перегруженные очереди влияют на tail latency.
+
+### 14. Сетевой ввод-вывод и cgo — разные случаи
+
+Netpoller интегрирует обычные сокеты в runtime, парковка G не обязана удерживать отдельный M. Долгая функция C через cgo не обязана иметь те же механизмы отмены и обслуживания, что обычный Go network I/O. Для cgo нужны отдельные договорённости о lifetime, callbacks, memory pinning и cancellation.
+
+### 15. Наблюдаемость планирования
+
+`GODEBUG=schedtrace=1000,scheddetail=1` показывает периодическую диагностическую информацию scheduler для исследования. `go tool trace` позволяет анализировать timeline задержек, парковок и пробуждений. Не использовать trace как доказательство того, что одна конкретная последовательность «всегда повторится».
+
+Источники: [runtime](https://pkg.go.dev/runtime), [runtime/HACKING](https://go.dev/src/runtime/HACKING), [Diagnostics](https://go.dev/doc/diagnostics).
