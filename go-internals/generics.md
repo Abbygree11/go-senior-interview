@@ -61,3 +61,38 @@ fmt.Println(Double(UserID(3))) // 6
 Чем `any` отличается от `comparable`? Почему нужен `~int` для `UserID`? Почему `var zero T` не всегда nil? Когда generics лучше интерфейса? Какие возможности generic methods зависят от версии Go?
 
 Источники: [Go spec — type parameters](https://go.dev/ref/spec#Type_parameter_declarations), [Go 1.27 release notes](https://go.dev/doc/go1.27).
+
+## Новые каверзы: type sets и generic methods в Go 1.27
+
+### 9. Generic method теперь допустим, но не реализует метод интерфейса
+
+Go 1.27 разрешает **собственные type parameters в методах конкретных типов**, но интерфейсный method set по-прежнему не содержит generic methods.
+
+```go
+type Box struct{}
+func (Box) Identity[T any](v T) T { return v } // Go 1.27+
+func main() {
+    var b Box
+    fmt.Println(b.Identity(42)) // 42
+}
+```
+
+**Каверза:** нельзя объявить interface с `Identity[T any]` как контракт обычного интерфейса; generic concrete method нельзя считать реализацией «такого» интерфейсного метода. Для полиморфизма над поведением нужны обычные методы интерфейса или generic функции/типы.
+
+### 10. `comparable` — не гарантия «никогда не паниковать» при динамическом сравнении
+
+Generic функция с `T comparable` может быть инстанцирована типом интерфейса, в котором динамически лежит `[]int`. Тогда сравнение двух таких значений может вызвать panic: статическое удовлетворение constraint не делает **динамическое содержимое** сравнимым.
+
+### 11. Type set — не runtime union
+
+`interface{ ~int | ~int64 }` используется **как constraint**, но не как обычный interface для произвольной runtime переменной `var x interface{ ~int | ~int64 }`. Это ограничение языка: non-basic interfaces, содержащие union/type terms, применяются только в соответствующих позициях ограничений.
+
+### 12. Inference не безграничен
+
+`func Zero[T any]() T { var z T; return z }` не выводит `T` по отсутствующим аргументам в произвольной вызовной позиции: `Zero()` требует конкретизации, например `Zero[int]()` (если контекст сам не предоставляет разрешённого правила вывода). С Go 1.27 расширено inference generic function values в assignment contexts; это **не отменяет** всех требований к указанию типа.
+
+### 13. Не обещать более быстрый машинный код
+
+У Go generics нет универсальной гарантии «полная мономорфизация каждой инстанциации». Инлайнинг, shape-specialization, dictionaries и аллокации — вопросы версии компилятора. `go test -benchmem` и профилирование решают, что выгоднее для реального кода.
+
+Источники: [Generic Methods, Go team](https://go.dev/blog/generic-methods), [Go 1.27 release notes](https://go.dev/doc/go1.27), [Go spec](https://go.dev/ref/spec#Interface_types).
