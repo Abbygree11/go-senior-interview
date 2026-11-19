@@ -13,6 +13,10 @@
 | [Map](maps.md) | Хеш-таблица, `nil`, `comma-ok`, неадресуемость значений, итерация, runtime Swiss Tables, конкурентный доступ |
 | [Интерфейсы](interfaces.md) | Динамический тип/значение, typed `nil`, `error`, method sets, pointer receivers, assertions, сравнение |
 | [Строки](strings.md) | Байты, UTF-8, `rune`, графемы, конвертация, Unicode-нормализация, память |
+| [Указатели и структуры](pointers-structs.md) | Копирование, aliasing, receivers, nil, layout/padding, `new` в Go 1.26 |
+| [Функции и замыкания](functions-closures.md) | Захват переменных, method values, циклы, callback под mutex и удержание памяти |
+| [Generics](generics.md) | Constraints, type sets, `~`, `comparable`, generic methods и версии Go |
+| [Ошибки](errors.md) | Typed nil, `%w`, `errors.Is/As`, `Join`, ошибки закрытия и cause |
 | [Defer, panic, recover](defer-panic.md) | LIFO, захват аргументов, замыкания, именованные возвраты, циклы, cleanup, границы `recover` |
 
 ## Конкурентность и примитивы
@@ -28,6 +32,8 @@
 | [Atomics](atomics.md) | SC memory ordering, `Load/Store/Add`, CAS, ABA, `atomic.Pointer`, `atomic.Value`, immutable snapshots |
 | [WaitGroup](waitgroup.md) | Регистрация до запуска, `Wait`, double Done, `WaitGroup.Go`, канал results и deadlock |
 | [Context](context.md) | Дерево отмены, `Done`/`Err`/`Cause`, deadline, утечки, контекст и отправка |
+| [Модель памяти](memory-model.md) | Happens-before, каналы, mutex, atomics, безопасная публикация, data races |
+| [Таймеры](timers.md) | `Timer/After/Ticker`, `Stop/Reset`, unbuffered-каналы в Go 1.27, старые ловушки |
 | [sync.Map](sync-map.md) | `LoadOrStore` и двойное вычисление, нет транзакции `Load+Store`, `Range`, выбор против map+mutex |
 | [sync.Once](sync-once.md) | Инициализация, публикация, panic, ошибки, retry, рекурсивный Do |
 | [sync.Cond](sync-cond.md) | Lock + predicate, цикл `Wait`, потерянный сигнал, Signal/Broadcast, отмена |
