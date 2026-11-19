@@ -172,3 +172,59 @@ fmt.Println(data[0]) // 9
 6. Что произойдёт, если `ctx.Done() == nil`?
 
 Источники: [Go spec — channel types](https://go.dev/ref/spec#Channel_types), [select](https://go.dev/ref/spec#Select_statements), [Go memory model](https://go.dev/ref/mem), [Go pipelines](https://go.dev/blog/pipelines).
+
+## Ещё несколько принципиальных каверз
+
+### 14. Отправка в закрытый канал внутри `select` — не «не готова»
+
+```go
+ch := make(chan int)
+close(ch)
+select {
+case ch <- 1:
+    fmt.Println("sent") // до этого не дойдёт
+default:
+    fmt.Println("default")
+}
+// panic: send on closed channel
+```
+
+**Почему:** закрытая отправка — ошибочная операция, которая вызывает panic; `default` не спасает. В сравнении с `nil`-каналом (send никогда не готов) это совершенно другая семантика.
+
+### 15. Нельзя сделать безопасный `isClosed(ch)`
+
+Даже если кто-то вычислил «закрыт ли канал» в момент T, в момент T+1 владелец может закрыть его. Предварительная проверка не делает последующую отправку атомарной. Архитектурное решение — **согласованный владелец закрытия**, а не `recover` вокруг конкурентной отправки.
+
+### 16. `chan<- T` и `<-chan T` — ограничения компиляции, не отдельные каналы
+
+```go
+func producer(out chan<- int) { out <- 7 }
+func consumer(in <-chan int) { fmt.Println(<-in) }
+ch := make(chan int, 1)
+producer(ch)
+consumer(ch)
+```
+
+Обе функции получили **тот же** объект канала, но compile-time API ограничивает действия. Можно закрыть send-only канал (`close(out)`), но нельзя закрыть receive-only канал; отсюда не следует, что **любой** send-only пользователь должен закрывать канал.
+
+### 17. `range` по nil vs закрытому каналу
+
+```go
+var a chan int
+// for v := range a {} // ждёт бесконечно
+b := make(chan int)
+close(b)
+for v := range b { fmt.Println(v) } // сразу заканчивается
+```
+
+`range` — просто повторный receive до `ok == false`. Он не знает про жизненный цикл другого сервиса.
+
+### 18. Порядок памяти буферизованного канала — не такой, как у unbuffered
+
+Для канала ёмкости C Go memory model утверждает: **k-й receive синхронизируется до завершения (k+C)-го send**. В unbuffered режиме соответствующий receive должен встретиться с send; в buffered режиме отправка может завершиться до того, как кто-либо начал читать. Поэтому buffered channel не всегда является подтверждением *обработки*, он подтверждает лишь *помещение в очередь*.
+
+### 19. Почему буфер не исправляет утечку producer
+
+`make(chan int, 1000)` может скрыть ошибку отладки: первые 1000 сообщений проходят, затем всё зависает. Рост буфера откладывает момент deadlock, но не устраняет отсутствие потребителя и протокола остановки.
+
+Источники: [Go spec — channels](https://go.dev/ref/spec#Channel_types), [Go memory model](https://go.dev/ref/mem), [Go pipelines](https://go.dev/blog/pipelines).
